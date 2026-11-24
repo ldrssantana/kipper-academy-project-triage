@@ -78,7 +78,7 @@ processos separados".
   mesmo evento reenviado manualmente) pode chegar mais de uma vez. Sem essa técnica, o
   comentário de triagem seria publicado duas vezes na mesma issue.
 - **Onde aparece no código:** tabela `processed_events` com `event_id UNIQUE`. Antes de
-  chamar a API externa, `TriagemService` verifica essa tabela **na mesma transação**
+  chamar a API externa, `TriageService` verifica essa tabela **na mesma transação**
   em que grava o resultado; se o `eventId` já existe, não repete a chamada externa e
   devolve a confirmação já registrada.
 - **Como demonstrar:** reenviar o mesmo JSON de evento (mesmo `eventId`) depois de já
@@ -355,8 +355,9 @@ GITHUB_TEST_REPO=sua-conta/repo-de-teste
 | 1. Docker + build.gradle | ✅ Feito | `docker compose up -d --wait` sobe Postgres 16 + RabbitMQ 3.13 (healthy). Artefatos do Testcontainers corrigidos para os nomes 2.x (`testcontainers-postgresql`, etc.). |
 | 2. Entidades JPA + catálogo | ✅ Feito | `schema.sql` (tabelas + constraints explícitas), `data.sql` (catálogo, `ON CONFLICT DO NOTHING`), `ddl-auto=validate`. Pacotes `domain/` e `persistence/`. `PersistenceIntegrationTest` (3 testes) passando. Colunas extras em `issue_triage`: `review_reason`, `publication_error`. |
 | 3. IngestionController + fila | ✅ Feito | `POST /api/events` → grava `issue_event` (`INSERT … ON CONFLICT DO NOTHING`) → publica com *publisher confirm* → `202`. Broker fora → `503` (nunca `202` sem confirmação). Exchange `kipper.issue-events` (direct) → fila durável `kipper.issue-events.triage` com DLQ `…triage.dlq`. `eventId` repetido é aceito e **republicado** (dedup é do worker). `type` ausente → `issue.created`. Perfis: `application-ingestion.properties` (porta 8080) e `application-worker.properties` (sem web). `IngestionIntegrationTest` (5 testes) usa fila própria `kipper.test.*`. RabbitMQ ganhou volume + hostname fixo (mensagens sobrevivem à recriação do container) e healthcheck `check_port_connectivity`. |
-| 4. TriageConsumer + guardas + idempotência | ⬜ Próximo | |
-| 5–8 | ⬜ Pendente | |
+| 4. TriageConsumer + guardas + idempotência | ✅ Feito | `TriageConsumer` (`@Profile("worker")`) → `TriageService.process` (transação: claim em `processed_events` → `TriageHarness` → upsert `issue_triage`). `DeterministicGuards`: repo fora do catálogo / descrição vazia → `REVISAO_HUMANA` sem IA; demais eventos também `REVISAO_HUMANA` ("análise de IA ainda não habilitada") até o passo 5. `TriageWorkerIntegrationTest` (6 testes): guardas, reentrega ignorada, 4 threads com o mesmo `eventId` → só 1 processa, mensagem inválida → DLQ. Validado ponta a ponta com os 2 processos (fila 4→0, reenvio ignorado). |
+| 5. Harness de IA (Router + 2 especialistas + tool) | ⬜ Próximo | |
+| 6–8 | ⬜ Pendente | |
 
 ### Pendências / decisões em aberto
 
@@ -369,16 +370,26 @@ GITHUB_TEST_REPO=sua-conta/repo-de-teste
 
 ### Notas para os próximos passos
 
-- **Passo 4 (idempotência):** gravar `ProcessedEvent` com `EntityManager.persist` ou
-  `INSERT` nativo — **nunca** `repository.save()`, que faz `merge` e sobrescreve em
-  silêncio um `eventId` já existente, anulando a proteção.
+- **Idempotência (feito no passo 4):** `ProcessedEventRepository.claim` = `INSERT … ON
+  CONFLICT DO NOTHING` — **nunca** `repository.save()` (faz `merge` e aceitaria em
+  silêncio um `eventId` repetido). O claim é o **primeiro** comando da transação de
+  `TriageService.process`; se a transação falhar, o claim é desfeito junto.
 - **Ambiente local:** `java` não está no PATH; para rodar o Gradle no terminal use
   `JAVA_HOME=~/.jdks/ms-17.0.21.0.2` (JDK 17 baixado pelo IntelliJ).
-- **Passo 4 (consumidor):** `@RabbitListener(queues = "${app.messaging.queue}")` com
-  `@Profile("worker")`, parâmetro `IssueEventMessage`. Erro inesperado → rejeitar **sem**
-  requeue (`AmqpRejectAndDontRequeueException`) para cair na DLQ em vez de loop infinito.
-  `PublicationStatus.PENDING` existe mas a ingestão **não** cria linha em `issue_triage`
-  (o `GET` precisa dar `404` até o worker processar).
+- **Passo 5 (IA):** substituir o fallback `AI_NOT_ENABLED` em `TriageHarness.analyze` pelo
+  Router + especialistas; as guardas (`DeterministicGuards`) continuam rodando antes.
+- **Passo 6 (GitHub) — cuidados de idempotência:**
+  - Falha na API do GitHub → **não** relançar: apagar o claim (`DELETE FROM
+    processed_events WHERE event_id = …`) e gravar `publicationStatus = FAILED` +
+    `publication_error` na mesma transação (SPEC 9: permite nova tentativa reenviando o
+    evento, sem duplicar, pois nada foi publicado).
+  - Janela restante: comentário publicado e o commit do banco falha → reentrega publicaria
+    de novo. Fechar com um marcador oculto no corpo do comentário
+    (`<!-- kipper-triage:event=<eventId> -->`) e checar os comentários da issue antes de
+    publicar; se o marcador já existe, reaproveitar id/URL em vez de publicar.
+- **Worker:** concorrência 1, prefetch 1; retry 3x com backoff (1s, 2s) e depois DLQ
+  (`application-worker.properties`). `PublicationStatus.PENDING` não é usado: a ingestão
+  **não** cria linha em `issue_triage` (o `GET` precisa dar `404` até o worker processar).
 - **Rodar os processos:** `./gradlew bootRun --args='--spring.profiles.active=ingestion'`
   (e `=worker` em outro terminal, a partir do passo 4).
 - **Retomar:** abrir o Docker Desktop → `docker compose up -d --wait` → `./gradlew test`.
