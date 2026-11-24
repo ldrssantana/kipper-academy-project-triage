@@ -370,7 +370,12 @@ GITHUB_TEST_REPO=sua-conta/repo-de-teste
   Evidências reais (2026-11-24): #1 BUG → Bug Investigator → comentário publicado; #3
   MELHORIA (exportar CSV) → Improvement & Question Analyst → comentário publicado; #4
   "Não Funciona" sem descrição → guarda → `REVISAO_HUMANA`/`SKIPPED_REVIEW`, sem IA e sem
-  comentário. **Pendente:** webhook do GitHub para o "evento real" (Desafio.txt linha 31).
+  comentário. **Webhook real (2026-11-24):** issue #5 "Como gerar a segunda via de uma
+  fatura?" criada no GitHub → webhook (delivery `51970b80-…`) → fila → DUVIDA → Improvement &
+  Question Analyst → comentário publicado sozinho. **Redeliver** pelo GitHub da mesma entrega
+  3 min depois: ingestão aceitou e republicou ("reenviado: ja estava auditado"), worker
+  "ja processado antes: ignorado"; issue #5 com **1** comentário; `processed_events` = 1.
+  O GitHub também enviou `issues`/`status_changed` na criação → ignorado (200 IGNORED).
 - ✅ **Repo real no catálogo:** adicionado ao `data.sql`.
 
 ### Notas para os próximos passos
