@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: kipper-academy-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-kipper_academy}
+      POSTGRES_USER: ${POSTGRES_USER:-kipper}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - kipper-academy-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kipper} -d ${POSTGRES_DB:-kipper_academy}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: kipper-academy-rabbitmq
+    # Hostname fixo: o RabbitMQ guarda os dados por nome de no (rabbit@<hostname>);
+    # sem isso, recriar o container perderia as mensagens retidas no volume.
+    hostname: kipper-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"       # protocolo AMQP (usado pela aplicacao)
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672" # UI de gerenciamento (http://localhost:15672)
+    volumes:
+      # Fila duravel + mensagens persistentes so sobrevivem a recriacao do container com volume.
+      - kipper-academy-rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      # check_port_connectivity (e nao so ping): so fica healthy quando a porta AMQP ja aceita conexoes
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  kipper-academy-postgres-data:
+  kipper-academy-rabbitmq-data:
