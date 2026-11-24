@@ -7,6 +7,10 @@ import org.springframework.http.ProblemDetail;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -35,6 +39,20 @@ public class ApiExceptionHandler {
     ProblemDetail handleUnreadable(HttpMessageNotReadableException ex) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST,
                 "Corpo da requisicao nao e um JSON valido para o contrato do evento.");
+    }
+
+    /** Parametro de consulta ausente, de tipo errado (issueNumber=abc) ou invalido (issueNumber=0) -> 400. */
+    @ExceptionHandler({MissingServletRequestParameterException.class, MethodArgumentTypeMismatchException.class,
+            HandlerMethodValidationException.class})
+    ProblemDetail handleBadParameter(Exception ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST,
+                "Parametros invalidos: informe repository (texto) e issueNumber (inteiro positivo).");
+    }
+
+    /** Erros com status explicito (ex.: 404 de issue ainda nao processada). */
+    @ExceptionHandler(ResponseStatusException.class)
+    ProblemDetail handleStatus(ResponseStatusException ex) {
+        return ProblemDetail.forStatusAndDetail(ex.getStatusCode(), ex.getReason());
     }
 
     /**
