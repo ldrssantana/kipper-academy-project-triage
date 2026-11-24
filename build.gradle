@@ -40,4 +40,9 @@ dependencies {
 
 tasks.named('test') {
     useJUnitPlatform()
+    // Testes que chamam o Claude de verdade (custam creditos) so rodam com -Plive=true
+    systemProperty 'live', findProperty('live') ?: 'false'
+    testLogging {
+        showStandardStreams = findProperty('live') == 'true'
+    }
 }

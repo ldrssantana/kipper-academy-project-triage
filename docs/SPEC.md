@@ -356,8 +356,9 @@ GITHUB_TEST_REPO=sua-conta/repo-de-teste
 | 2. Entidades JPA + catálogo | ✅ Feito | `schema.sql` (tabelas + constraints explícitas), `data.sql` (catálogo, `ON CONFLICT DO NOTHING`), `ddl-auto=validate`. Pacotes `domain/` e `persistence/`. `PersistenceIntegrationTest` (3 testes) passando. Colunas extras em `issue_triage`: `review_reason`, `publication_error`. |
 | 3. IngestionController + fila | ✅ Feito | `POST /api/events` → grava `issue_event` (`INSERT … ON CONFLICT DO NOTHING`) → publica com *publisher confirm* → `202`. Broker fora → `503` (nunca `202` sem confirmação). Exchange `kipper.issue-events` (direct) → fila durável `kipper.issue-events.triage` com DLQ `…triage.dlq`. `eventId` repetido é aceito e **republicado** (dedup é do worker). `type` ausente → `issue.created`. Perfis: `application-ingestion.properties` (porta 8080) e `application-worker.properties` (sem web). `IngestionIntegrationTest` (5 testes) usa fila própria `kipper.test.*`. RabbitMQ ganhou volume + hostname fixo (mensagens sobrevivem à recriação do container) e healthcheck `check_port_connectivity`. |
 | 4. TriageConsumer + guardas + idempotência | ✅ Feito | `TriageConsumer` (`@Profile("worker")`) → `TriageService.process` (transação: claim em `processed_events` → `TriageHarness` → upsert `issue_triage`). `DeterministicGuards`: repo fora do catálogo / descrição vazia → `REVISAO_HUMANA` sem IA; demais eventos também `REVISAO_HUMANA` ("análise de IA ainda não habilitada") até o passo 5. `TriageWorkerIntegrationTest` (6 testes): guardas, reentrega ignorada, 4 threads com o mesmo `eventId` → só 1 processa, mensagem inválida → DLQ. Validado ponta a ponta com os 2 processos (fila 4→0, reenvio ignorado). |
-| 5. Harness de IA (Router + 2 especialistas + tool) | ⬜ Próximo | |
-| 6–8 | ⬜ Pendente | |
+| 5. Harness de IA (Router + 2 especialistas + tool) | ✅ Feito | Modelo `claude-opus-5-5` (`app.ai.model`). `ClaudeCaller`: loop manual de ferramenta (máx. 3 rodadas), saída por *structured outputs* (JSON Schema), `effort` LOW no roteador / MEDIUM nos especialistas, fallback de recusa no servidor (`server-side-fallback-2026-07-01`). `TriageRouter` devolve BUG/MELHORIA/DUVIDA/**INDEFINIDO** (INDEFINIDO → revisão humana). `CatalogTool` (`consultarCatalogoProjeto`) só lê o catálogo **do repositório do evento**; outro repo → erro "acesso negado". Texto da issue vai em `<issue>` como dado (tags de fechamento neutralizadas). Validação 6.4 no `TriageHarness`: recusa, `max_tokens`, JSON fora do schema, campo vazio ou > 1500 chars, erro da API → `REVISAO_HUMANA`. Triagem aceita fica `PENDING` até o passo 6. Testes: `TriageHarnessTest` (7) e `CatalogToolTest` (4) com IA simulada; `ClaudeLiveTest` (2, opt-in `-Plive=true`) validado contra a API real: evento do desafio → BUG/Bug Investigator citando billing-team e pedindo log; modo escuro → MELHORIA/Analyst (~US$ 0,04). |
+| 6. GitHubCommentPublisher | ⬜ Próximo | |
+| 7–8 | ⬜ Pendente | |
 
 ### Pendências / decisões em aberto
 
@@ -376,8 +377,11 @@ GITHUB_TEST_REPO=sua-conta/repo-de-teste
   `TriageService.process`; se a transação falhar, o claim é desfeito junto.
 - **Ambiente local:** `java` não está no PATH; para rodar o Gradle no terminal use
   `JAVA_HOME=~/.jdks/ms-17.0.21.0.2` (JDK 17 baixado pelo IntelliJ).
-- **Passo 5 (IA):** substituir o fallback `AI_NOT_ENABLED` em `TriageHarness.analyze` pelo
-  Router + especialistas; as guardas (`DeterministicGuards`) continuam rodando antes.
+- **IA (feito no passo 5):** falha da API (rede, chave inválida, 429 após os 2 retries do
+  SDK) vira `REVISAO_HUMANA` com motivo "falha ao chamar a IA" — o evento fica registrado
+  como processado; para tentar de novo, reenviar com **outro** `eventId`. As chamadas de IA
+  rodam dentro da transação do claim (ok com concorrência 1).
+- **Teste real com o Claude:** `./gradlew test --tests '*ClaudeLiveTest' -Plive=true`.
 - **Passo 6 (GitHub) — cuidados de idempotência:**
   - Falha na API do GitHub → **não** relançar: apagar o claim (`DELETE FROM
     processed_events WHERE event_id = …`) e gravar `publicationStatus = FAILED` +

@@ -2,8 +2,13 @@ package org.example.kipper_academy.worker;
 
 import org.example.kipper_academy.domain.IssueTriage;
 import org.example.kipper_academy.domain.PublicationStatus;
+import org.example.kipper_academy.domain.Specialist;
 import org.example.kipper_academy.domain.TriageCategory;
 import org.example.kipper_academy.harness.DeterministicGuards;
+import org.example.kipper_academy.harness.TriageRouter;
+import org.example.kipper_academy.harness.specialist.BugInvestigatorSpecialist;
+import org.example.kipper_academy.harness.specialist.ImprovementQuestionSpecialist;
+import org.example.kipper_academy.harness.specialist.SpecialistAgent;
 import org.example.kipper_academy.messaging.IssueEventMessage;
 import org.example.kipper_academy.messaging.MessagingProperties;
 import org.example.kipper_academy.persistence.IssueTriageRepository;
@@ -18,6 +23,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -34,6 +40,8 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 /**
  * Passo 4 da SPEC: fila -> worker -> guardas deterministicas -> banco, com consumidor idempotente.
@@ -72,9 +80,26 @@ class TriageWorkerIntegrationTest {
     /** Numeros de issue aleatorios e altos: nao colidem com dados reais da demo. */
     private final List<Integer> usedIssueNumbers = new ArrayList<>();
 
+    /** IA simulada: este teste valida fila, worker e idempotencia, sem gastar creditos da API. */
+    @MockitoBean
+    TriageRouter router;
+
+    @MockitoBean
+    BugInvestigatorSpecialist bugInvestigator;
+
+    @MockitoBean
+    ImprovementQuestionSpecialist analyst;
+
     @BeforeEach
-    void emptyDeadLetterQueue() {
+    void emptyDeadLetterQueueAndStubAi() {
         amqpAdmin.purgeQueue(props.deadLetterQueue(), false);
+
+        when(router.classify(any())).thenReturn(new TriageRouter.Decision(TriageRouter.Route.BUG, "erro 500"));
+        when(bugInvestigator.id()).thenReturn(Specialist.BUG_INVESTIGATOR);
+        when(bugInvestigator.handles(TriageCategory.BUG)).thenReturn(true);
+        when(bugInvestigator.analyze(any(), any())).thenReturn(new SpecialistAgent.Proposal(
+                "Login retorna erro 500.", "Time Billing (billing-team): pedir log completo e passos de reproducao."));
+        when(analyst.id()).thenReturn(Specialist.IMPROVEMENT_QUESTION_ANALYST);
     }
 
     @AfterEach
@@ -112,14 +137,18 @@ class TriageWorkerIntegrationTest {
     }
 
     @Test
-    void eventoQuePassaPelasGuardasAindaVaiParaRevisaoHumanaSemIA() {
+    void eventoQuePassaPelasGuardasETriadoPelaIAEFicaPendenteDePublicacao() {
         IssueEventMessage event = event(KNOWN_REPO, "Ao enviar o formulario de login, recebo erro 500.");
 
         publish(event);
 
         IssueTriage triage = awaitTriage(event);
-        assertThat(triage.getCategory()).isEqualTo(TriageCategory.REVISAO_HUMANA);
-        assertThat(triage.getReviewReason()).contains("IA");
+        assertThat(triage.getCategory()).isEqualTo(TriageCategory.BUG);
+        assertThat(triage.getSpecialist()).isEqualTo(Specialist.BUG_INVESTIGATOR);
+        assertThat(triage.getSummary()).isEqualTo("Login retorna erro 500.");
+        assertThat(triage.getNextStep()).contains("billing-team");
+        assertThat(triage.getReviewReason()).isNull();
+        assertThat(triage.getPublicationStatus()).isEqualTo(PublicationStatus.PENDING);
     }
 
     @Test

@@ -9,6 +9,7 @@ import org.example.kipper_academy.harness.TriageResult;
 import org.example.kipper_academy.messaging.IssueEventMessage;
 import org.example.kipper_academy.persistence.IssueTriageRepository;
 import org.example.kipper_academy.persistence.ProcessedEventRepository;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,6 +25,7 @@ import java.time.Instant;
  */
 @Slf4j
 @Service
+@Profile("worker")
 @RequiredArgsConstructor
 public class TriageService {
 
@@ -51,8 +53,10 @@ public class TriageService {
         triage.setNextStep(result.nextStep());
         triage.setSpecialist(result.specialist());
         triage.setReviewReason(result.reviewReason());
-        // Passo 4: ainda nao ha publicacao externa; revisao humana nunca publica comentario.
-        triage.setPublicationStatus(PublicationStatus.SKIPPED_REVIEW);
+        // Revisao humana nunca publica comentario. Triagem aceita fica PENDING ate a publicacao (passo 6).
+        triage.setPublicationStatus(result.requiresHumanReview()
+                ? PublicationStatus.SKIPPED_REVIEW
+                : PublicationStatus.PENDING);
         triage.setPublicationError(null);
         triageRepository.save(triage);
 
