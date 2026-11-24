@@ -29,4 +29,12 @@ public interface ProcessedEventRepository extends JpaRepository<ProcessedEvent, 
             ON CONFLICT (event_id) DO NOTHING
             """)
     int claim(@Param("eventId") String eventId, @Param("processedAt") Instant processedAt);
+
+    /**
+     * Libera a reivindicacao quando a acao externa falhou sem publicar nada (SPEC 9):
+     * o mesmo eventId podera ser processado de novo.
+     */
+    @Modifying
+    @Query(nativeQuery = true, value = "DELETE FROM processed_events WHERE event_id = :eventId")
+    int release(@Param("eventId") String eventId);
 }

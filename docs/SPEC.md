@@ -357,17 +357,16 @@ GITHUB_TEST_REPO=sua-conta/repo-de-teste
 | 3. IngestionController + fila | ✅ Feito | `POST /api/events` → grava `issue_event` (`INSERT … ON CONFLICT DO NOTHING`) → publica com *publisher confirm* → `202`. Broker fora → `503` (nunca `202` sem confirmação). Exchange `kipper.issue-events` (direct) → fila durável `kipper.issue-events.triage` com DLQ `…triage.dlq`. `eventId` repetido é aceito e **republicado** (dedup é do worker). `type` ausente → `issue.created`. Perfis: `application-ingestion.properties` (porta 8080) e `application-worker.properties` (sem web). `IngestionIntegrationTest` (5 testes) usa fila própria `kipper.test.*`. RabbitMQ ganhou volume + hostname fixo (mensagens sobrevivem à recriação do container) e healthcheck `check_port_connectivity`. |
 | 4. TriageConsumer + guardas + idempotência | ✅ Feito | `TriageConsumer` (`@Profile("worker")`) → `TriageService.process` (transação: claim em `processed_events` → `TriageHarness` → upsert `issue_triage`). `DeterministicGuards`: repo fora do catálogo / descrição vazia → `REVISAO_HUMANA` sem IA; demais eventos também `REVISAO_HUMANA` ("análise de IA ainda não habilitada") até o passo 5. `TriageWorkerIntegrationTest` (6 testes): guardas, reentrega ignorada, 4 threads com o mesmo `eventId` → só 1 processa, mensagem inválida → DLQ. Validado ponta a ponta com os 2 processos (fila 4→0, reenvio ignorado). |
 | 5. Harness de IA (Router + 2 especialistas + tool) | ✅ Feito | Modelo `claude-opus-5-5` (`app.ai.model`). `ClaudeCaller`: loop manual de ferramenta (máx. 3 rodadas), saída por *structured outputs* (JSON Schema), `effort` LOW no roteador / MEDIUM nos especialistas, fallback de recusa no servidor (`server-side-fallback-2026-07-01`). `TriageRouter` devolve BUG/MELHORIA/DUVIDA/**INDEFINIDO** (INDEFINIDO → revisão humana). `CatalogTool` (`consultarCatalogoProjeto`) só lê o catálogo **do repositório do evento**; outro repo → erro "acesso negado". Texto da issue vai em `<issue>` como dado (tags de fechamento neutralizadas). Validação 6.4 no `TriageHarness`: recusa, `max_tokens`, JSON fora do schema, campo vazio ou > 1500 chars, erro da API → `REVISAO_HUMANA`. Triagem aceita fica `PENDING` até o passo 6. Testes: `TriageHarnessTest` (7) e `CatalogToolTest` (4) com IA simulada; `ClaudeLiveTest` (2, opt-in `-Plive=true`) validado contra a API real: evento do desafio → BUG/Bug Investigator citando billing-team e pedindo log; modo escuro → MELHORIA/Analyst (~US$ 0,04). |
-| 6. GitHubCommentPublisher | ⬜ Próximo | |
-| 7–8 | ⬜ Pendente | |
+| 6. GitHubCommentPublisher | ✅ Feito | `RestClient` → `POST /repos/{owner}/{name}/issues/{n}/comments` com o token da conta bot. **Allowlist:** só comenta em `GITHUB_TEST_REPO` (outro repo → `FAILED` sem chamar o GitHub). **Marcador** `<!-- kipper-triage:event=<id> -->` no corpo; antes de publicar, procura o marcador nos comentários da issue e reaproveita o existente. Falha de publicação → `FAILED` + `publication_error` + claim liberado (`ProcessedEventRepository.release`) na mesma transação. Revisão humana nunca publica. Catálogo ganhou `leandro-triage-bot/projeto_teste`. Testes: `GitHubCommentPublisherTest` (4, servidor HTTP simulado) e 2 novos no worker (revisão humana não publica; FAILED → reenvio publica). **Validado de verdade:** issue #1 de `leandro-triage-bot/projeto_teste` recebeu o comentário (BUG / Bug Investigator, `issuecomment-7135127343`); reenvio do mesmo `eventId` ignorado e a issue ficou com **1** comentário. |
+| 7. `GET /api/issues` | ⬜ Próximo | |
+| 8. README | ⬜ Pendente | |
 
 ### Pendências / decisões em aberto
 
-- **Conta GitHub de teste:** ✅ decidido (2026-11-24) — opção (B), conta "bot" separada.
-  Repo de teste criado **na própria conta bot**, token fine-grained restrito a esse repo
-  (permissão `Issues: Read and write`). Falta o usuário criar a conta e preencher
-  `GITHUB_TEST_TOKEN` / `GITHUB_TEST_REPO` no `.env`. Código não muda.
-- **Repo real no catálogo:** adicionar o repositório de teste real ao `data.sql` (mesmas
-  orientações de `equipe/projeto-teste`) para que o evento use o nome verdadeiro.
+- ✅ **Conta GitHub de teste:** conta bot `leandro-triage-bot`, repo
+  `leandro-triage-bot/projeto_teste` (issues #1 e #2), token fine-grained no `.env`.
+  Issue **#2** reservada para a demonstração (sem comentários); #1 já foi usada no teste.
+- ✅ **Repo real no catálogo:** adicionado ao `data.sql`.
 
 ### Notas para os próximos passos
 
@@ -382,18 +381,15 @@ GITHUB_TEST_REPO=sua-conta/repo-de-teste
   como processado; para tentar de novo, reenviar com **outro** `eventId`. As chamadas de IA
   rodam dentro da transação do claim (ok com concorrência 1).
 - **Teste real com o Claude:** `./gradlew test --tests '*ClaudeLiveTest' -Plive=true`.
-- **Passo 6 (GitHub) — cuidados de idempotência:**
-  - Falha na API do GitHub → **não** relançar: apagar o claim (`DELETE FROM
-    processed_events WHERE event_id = …`) e gravar `publicationStatus = FAILED` +
-    `publication_error` na mesma transação (SPEC 9: permite nova tentativa reenviando o
-    evento, sem duplicar, pois nada foi publicado).
-  - Janela restante: comentário publicado e o commit do banco falha → reentrega publicaria
-    de novo. Fechar com um marcador oculto no corpo do comentário
-    (`<!-- kipper-triage:event=<eventId> -->`) e checar os comentários da issue antes de
-    publicar; se o marcador já existe, reaproveitar id/URL em vez de publicar.
+- **GitHub (feito no passo 6):** três camadas contra comentário duplicado — (1) ledger
+  `processed_events` (reentrega ignorada), (2) marcador oculto no comentário (fecha a janela
+  "publicou mas o commit falhou"), (3) allowlist do repositório. Falha → `FAILED` e claim
+  liberado: reenviar o **mesmo** `eventId` tenta de novo (diferente da falha de IA).
 - **Worker:** concorrência 1, prefetch 1; retry 3x com backoff (1s, 2s) e depois DLQ
-  (`application-worker.properties`). `PublicationStatus.PENDING` não é usado: a ingestão
-  **não** cria linha em `issue_triage` (o `GET` precisa dar `404` até o worker processar).
+  (`application-worker.properties`). A ingestão **não** cria linha em `issue_triage` (o
+  `GET` precisa dar `404` até o worker processar); `PENDING` não é mais gravado.
+- **Enviar evento com acento pelo curl no Windows:** usar `--data-binary @arquivo.json`
+  (arquivo em UTF-8); `-d '...'` direto no Git Bash pode chegar com encoding errado → `400`.
 - **Rodar os processos:** `./gradlew bootRun --args='--spring.profiles.active=ingestion'`
   (e `=worker` em outro terminal, a partir do passo 4).
 - **Retomar:** abrir o Docker Desktop → `docker compose up -d --wait` → `./gradlew test`.

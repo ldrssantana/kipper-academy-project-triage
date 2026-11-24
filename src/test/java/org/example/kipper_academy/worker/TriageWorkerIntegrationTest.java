@@ -4,6 +4,10 @@ import org.example.kipper_academy.domain.IssueTriage;
 import org.example.kipper_academy.domain.PublicationStatus;
 import org.example.kipper_academy.domain.Specialist;
 import org.example.kipper_academy.domain.TriageCategory;
+import org.example.kipper_academy.external.GitHubCommentPublisher;
+import org.example.kipper_academy.external.GitHubCommentPublisher.PublishedComment;
+import org.example.kipper_academy.external.PublicationException;
+import org.example.kipper_academy.external.TriageComment;
 import org.example.kipper_academy.harness.DeterministicGuards;
 import org.example.kipper_academy.harness.TriageRouter;
 import org.example.kipper_academy.harness.specialist.BugInvestigatorSpecialist;
@@ -15,6 +19,7 @@ import org.example.kipper_academy.persistence.IssueTriageRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.amqp.core.AmqpAdmin;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
@@ -41,6 +46,10 @@ import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -90,6 +99,10 @@ class TriageWorkerIntegrationTest {
     @MockitoBean
     ImprovementQuestionSpecialist analyst;
 
+    /** GitHub simulado: nenhum comentario real e publicado por este teste. */
+    @MockitoBean
+    GitHubCommentPublisher publisher;
+
     @BeforeEach
     void emptyDeadLetterQueueAndStubAi() {
         amqpAdmin.purgeQueue(props.deadLetterQueue(), false);
@@ -100,6 +113,8 @@ class TriageWorkerIntegrationTest {
         when(bugInvestigator.analyze(any(), any())).thenReturn(new SpecialistAgent.Proposal(
                 "Login retorna erro 500.", "Time Billing (billing-team): pedir log completo e passos de reproducao."));
         when(analyst.id()).thenReturn(Specialist.IMPROVEMENT_QUESTION_ANALYST);
+        when(publisher.publish(any(), anyInt(), any(), any()))
+                .thenReturn(new PublishedComment(987L, "https://github.com/x/y/issues/1#issuecomment-987", false));
     }
 
     @AfterEach
@@ -137,7 +152,7 @@ class TriageWorkerIntegrationTest {
     }
 
     @Test
-    void eventoQuePassaPelasGuardasETriadoPelaIAEFicaPendenteDePublicacao() {
+    void eventoTriadoPelaIAEPublicadoComMarcadorDoEvento() {
         IssueEventMessage event = event(KNOWN_REPO, "Ao enviar o formulario de login, recebo erro 500.");
 
         publish(event);
@@ -148,7 +163,49 @@ class TriageWorkerIntegrationTest {
         assertThat(triage.getSummary()).isEqualTo("Login retorna erro 500.");
         assertThat(triage.getNextStep()).contains("billing-team");
         assertThat(triage.getReviewReason()).isNull();
-        assertThat(triage.getPublicationStatus()).isEqualTo(PublicationStatus.PENDING);
+        assertThat(triage.getPublicationStatus()).isEqualTo(PublicationStatus.PUBLISHED);
+        assertThat(triage.getExternalCommentId()).isEqualTo(987L);
+        assertThat(triage.getExternalCommentUrl()).endsWith("#issuecomment-987");
+
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(publisher).publish(eq(KNOWN_REPO), eq(event.issueNumber()), eq(event.eventId()), body.capture());
+        assertThat(body.getValue())
+                .contains("**Categoria:** Bug")
+                .contains("Login retorna erro 500.")
+                .contains(TriageComment.marker(event.eventId()));
+    }
+
+    @Test
+    void revisaoHumanaNuncaPublicaComentario() {
+        IssueEventMessage event = event("equipe/nao-cadastrado", "Erro 500 no login");
+
+        publish(event);
+        awaitTriage(event);
+
+        verify(publisher, never()).publish(any(), anyInt(), any(), any());
+    }
+
+    @Test
+    void falhaNaPublicacaoGravaFailedELiberaOEventoParaNovaTentativa() {
+        IssueEventMessage event = event(KNOWN_REPO, "Ao enviar o formulario de login, recebo erro 500.");
+        when(publisher.publish(any(), anyInt(), eq(event.eventId()), any()))
+                .thenThrow(new PublicationException("GitHub respondeu HTTP 503: indisponivel"))
+                .thenReturn(new PublishedComment(988L, "https://github.com/x/y/issues/1#issuecomment-988", false));
+
+        publish(event);
+
+        IssueTriage failed = awaitTriage(event, PublicationStatus.FAILED);
+        assertThat(failed.getPublicationError()).contains("HTTP 503");
+        assertThat(failed.getExternalCommentUrl()).isNull();
+        assertThat(processedCount(event.eventId())).isZero();
+
+        // Mesmo eventId reenviado: como nada foi publicado, e processado de novo e agora publica.
+        publish(event);
+
+        IssueTriage published = awaitTriage(event, PublicationStatus.PUBLISHED);
+        assertThat(published.getExternalCommentId()).isEqualTo(988L);
+        assertThat(published.getPublicationError()).isNull();
+        assertThat(processedCount(event.eventId())).isEqualTo(1);
     }
 
     @Test
@@ -230,11 +287,16 @@ class TriageWorkerIntegrationTest {
     }
 
     private IssueTriage awaitTriage(IssueEventMessage event) {
+        return awaitTriage(event, null);
+    }
+
+    private IssueTriage awaitTriage(IssueEventMessage event, PublicationStatus status) {
         return await(() -> triageRepository
                         .findByRepositoryAndIssueNumber(event.repository(), event.issueNumber())
                         .filter(t -> event.eventId().equals(t.getLastEventId()))
+                        .filter(t -> status == null || status == t.getPublicationStatus())
                         .orElse(null),
-                "triagem do evento " + event.eventId());
+                "triagem do evento " + event.eventId() + (status == null ? "" : " com status " + status));
     }
 
     private void awaitQueueDrained() {
