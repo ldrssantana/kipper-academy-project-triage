@@ -56,8 +56,8 @@ processos separados".
 
 ### 3.1 Método distribuído 1 — Mensageria assíncrona com fila durável
 
-- **Aula de referência:** 18/10 (EDA, filas, RabbitMQ, consumidor idempotente) e 29/09
-  (Arquitetura Assíncrona: Produtor → Fila/Tópico → Consumidor).
+- **Aula de referência:** EDA, filas, RabbitMQ, consumidor idempotente; Arquitetura
+  Assíncrona (Produtor → Fila/Tópico → Consumidor).
 - **Problema que resolve:** desacoplamento temporal entre recepção e análise. O
   processo `ingestion` nunca espera o `worker`; a fila retém o trabalho aceito até o
   `worker` voltar.
@@ -71,9 +71,9 @@ processos separados".
 
 ### 3.2 Método distribuído 2 — Consumidor idempotente (efeito exatamente uma vez)
 
-- **Aula de referência:** 18/10 ("at-least-once + consumidor idempotente = efeito
-  exatamente uma vez", `eventId` único, tabela de eventos processados, constraint
-  única) e 29/09 (Idempotency Key).
+- **Aula de referência:** "at-least-once + consumidor idempotente = efeito exatamente
+  uma vez", `eventId` único, tabela de eventos processados, constraint única;
+  Idempotency Key.
 - **Problema que resolve:** brokers entregam *at-least-once* — a mesma mensagem (ou o
   mesmo evento reenviado manualmente) pode chegar mais de uma vez. Sem essa técnica, o
   comentário de triagem seria publicado duas vezes na mesma issue.
@@ -360,7 +360,7 @@ GITHUB_TEST_REPO=sua-conta/repo-de-teste
 | 6. GitHubCommentPublisher | ✅ Feito | `RestClient` → `POST /repos/{owner}/{name}/issues/{n}/comments` com o token da conta bot. **Allowlist:** só comenta em `GITHUB_TEST_REPO` (outro repo → `FAILED` sem chamar o GitHub). **Marcador** `<!-- kipper-triage:event=<id> -->` no corpo; antes de publicar, procura o marcador nos comentários da issue e reaproveita o existente. Falha de publicação → `FAILED` + `publication_error` + claim liberado (`ProcessedEventRepository.release`) na mesma transação. Revisão humana nunca publica. Catálogo ganhou `leandro-triage-bot/projeto_teste`. Testes: `GitHubCommentPublisherTest` (4, servidor HTTP simulado) e 2 novos no worker (revisão humana não publica; FAILED → reenvio publica). **Validado de verdade:** issue #1 de `leandro-triage-bot/projeto_teste` recebeu o comentário (BUG / Bug Investigator, `issuecomment-7135127343`); reenvio do mesmo `eventId` ignorado e a issue ficou com **1** comentário. |
 | 7. `GET /api/issues` | ✅ Feito | `IssueQueryController` (perfil `ingestion`) lê `issue_triage`. `200` com os campos da SPEC 7 + `reviewReason`, `publicationError`, `lastEventId`; `404` (ProblemDetail) enquanto o worker não processou; `400` para parâmetro ausente/tipo errado/inválido. `IssueQueryIntegrationTest` (4). Validado no processo real: issue #1 → `200` `BUG`/`PUBLISHED` com a URL do comentário; issue #2 → `404`. |
 | 7b. Webhook do GitHub (evento real, Desafio.txt l.31) | ✅ Código / ⬜ ligar no GitHub | `POST /api/webhooks/github` (perfil `ingestion`): valida `X-Hub-Signature-256` (HMAC-SHA256, comparação em tempo constante, falha fechada sem segredo); `ping` → 200; `issues`+`opened` → mapeado para o contrato interno e enviado ao **mesmo** `IngestionService` (auditoria → fila); outras ações/eventos → 200 `IGNORED`. `eventId = "gh-" + X-GitHub-Delivery` — a doc do GitHub garante que o **Redeliver reusa o mesmo GUID**, então o reenvio pelo próprio GitHub cai no consumidor idempotente. GitHub exige resposta em 10 s e recomenda fila para processar depois (= Método 1). `GITHUB_WEBHOOK_SECRET` no `.env`. `GitHubWebhookIntegrationTest` (5). Exposição local via túnel (`cloudflared tunnel --url http://localhost:8080`), executado pelo usuário. |
-| 8. README | ⬜ Próximo | |
+| 8. README | ✅ Concluído | `README.md` (entrega), `docs/ARQUITETURA.md` (mapa do código), `docs/img/` (diagrama do fluxo) e `docs/examples/` (eventos de exemplo). Próximo: gravação do vídeo |
 
 ### Pendências / decisões em aberto
 

@@ -1,0 +1,11 @@
+{
+  "eventId": "evt-melhoria-001",
+  "type": "issue.created",
+  "occurredAt": "2026-11-24T12:05:00Z",
+  "data": {
+    "repository": "equipe/projeto-mobile",
+    "issueNumber": 7,
+    "title": "Modo escuro no app",
+    "description": "Seria ótimo ter um modo escuro no aplicativo, uso muito à noite."
+  }
+}

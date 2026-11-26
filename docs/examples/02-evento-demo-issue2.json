@@ -1,0 +1,11 @@
+{
+  "eventId": "evt-demo-issue-2",
+  "type": "issue.created",
+  "occurredAt": "2026-11-24T12:00:00Z",
+  "data": {
+    "repository": "leandro-triage-bot/projeto_teste",
+    "issueNumber": 2,
+    "title": "Erro ao entrar no sistema",
+    "description": "Ao enviar o formulário de login, recebo erro 500."
+  }
+}

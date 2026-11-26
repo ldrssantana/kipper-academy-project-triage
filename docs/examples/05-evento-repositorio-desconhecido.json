@@ -1,0 +1,11 @@
+{
+  "eventId": "evt-repo-desconhecido-001",
+  "type": "issue.created",
+  "occurredAt": "2026-11-24T12:15:00Z",
+  "data": {
+    "repository": "outra-equipe/repositorio-fora-do-catalogo",
+    "issueNumber": 1,
+    "title": "Erro ao salvar cadastro",
+    "description": "Ao salvar o cadastro recebo uma mensagem de erro."
+  }
+}

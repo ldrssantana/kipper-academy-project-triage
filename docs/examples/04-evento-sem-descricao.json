@@ -1,0 +1,10 @@
+{
+  "eventId": "evt-sem-descricao-001",
+  "type": "issue.created",
+  "occurredAt": "2026-11-24T12:10:00Z",
+  "data": {
+    "repository": "equipe/projeto-teste",
+    "issueNumber": 43,
+    "title": "Não funciona"
+  }
+}
